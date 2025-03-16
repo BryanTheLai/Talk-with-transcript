@@ -1,2 +1,8 @@
 pytube 
 youtube-transcript-api
+
+google-genai
+python-dotenv
+google-api-python-client
+
+curl_cffi 
