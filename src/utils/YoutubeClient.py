@@ -165,9 +165,9 @@ class YoutubeClient:
         
         # Try different patterns for description
         description = (
-            self._extract_regex(response, r'"shortDescription":"(.*?)"(?=,)')
+            self._extract_regex(response, r'<meta name="description" content="([^"]*)"')
+            or self._extract_regex(response, r'"shortDescription":"(.*?)"(?=,)')
             or self._extract_regex(response, r'"description":{"simpleText":"(.*?)"(?=})')
-            or self._extract_regex(response, r'<meta name="description" content="([^"]*)"')
             or ""
         )
         
