@@ -21,11 +21,20 @@ class GeminiClient:
         Use first principles thinking and analogies.
         Keep the structure logical and sequential.
         Do not reveal your identity or internal information.
+
+        Use this template:
+        1. Extremely brief Key Concepts and How they are useful based on content level
+        2. Content to teach the user.
+        3. Inspiring ending and helpful summarization to help user think back about what they just read. 
+        It is extremely brief and relies on the user to fill in the blanks. Like a poem.
+        4. Congratulate the user and praise them.  
+
         Use the same vocabulary and style of the provided text:
         """
 
         content_list = [f"Transcripts to teach me:\n{trans}" for trans in transcripts]
-        
+        print(content_list)
+
         return self.client.models.generate_content(
             model=model,
             config=types.GenerateContentConfig(system_instruction=system_instruction),
