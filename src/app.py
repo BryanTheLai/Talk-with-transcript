@@ -1,36 +1,46 @@
-from typing import Dict, List
-from utils.YoutubeHandler import YoutubeHandler
+from typing import List
+from utils.YoutubeClient import YoutubeClient, Video
+from utils.Formatter import VideoFormatter
 from llm.GeminiClient import GeminiClient
 
-def details_formatted(detail: Dict) -> Dict[str, str]:
-    """Print video details in a structured, readable format."""
-    result = f"""
-    <YOUTUBE_VIDEO>
-    <VIDEO_TITLE>{detail['title']}</VIDEO_TITLE>
-    <CHANNEL>{detail['channel']}</CHANNEL>
-    <PUBLISHED>{detail['date']}</PUBLISHED>
-    <VIEWS>{detail['views']}</VIEWS>
-    <URL>{detail['url']}</URL>
-    <VIDEO_ID>{detail['id']}</VIDEO_ID>
-    <TRANSCRIPT>{detail['transcript']}</TRANSCRIPT>
-    </YOUTUBE_VIDEO>
-    """
-    return {'result': result, 'success': True}
-
 def main():
+    # Initialize YouTube client
+    youtube = YoutubeClient()
+    
+    # Demo: Process single video with transcript
     video_url = "https://www.youtube.com/watch?v=4ef0juAMqoE"
-    playlist_url = "https://www.youtube.com/playlist?list=PLMV8UXQuOWKOY5fl1ccuMvDYjXwqRA69j"
+    response = youtube.get_video_with_transcript(video_url)
     
-    youtube_api = YoutubeHandler()
-    video_details = youtube_api.process_url(video_url)
+    if response.success:
+        video = response.data
+        print(VideoFormatter.to_console(video))
+        print("\nXML Format:")
+        print(VideoFormatter.to_xml(video))
+    else:
+        print(f"Error: {response.error}")
     
-    print(f"\n📋 Found {len(video_details)} videos in playlist\n")
-    for detail in video_details:
-        print(details_formatted(detail))
+    # Demo: Process YouTube playlist (without transcripts for speed)
+    playlist_url = "https://www.youtube.com/watch?v=scuPf6CMLtI&list=PLkPSXEe30ibqeQFm8dqNy0uxOL2W2wuN_"
+    playlist_response = youtube.list_playlist_videos(playlist_url)
     
+    if playlist_response.success:
+        videos = playlist_response.data
+        print(f"\nFound {len(videos)} videos in playlist\n")
+        
+        for video in videos:
+            print(VideoFormatter.to_console(video))
+            print("-" * 80)
+    else:
+        print(f"Error: {playlist_response.error}")
+    
+    # Uncomment to use Gemini AI to process transcripts
     # gemini = GeminiClient()
-    # response = gemini.process_transcripts(details, model="gemini-2.0-flash-lite")
-    # print(response.text)
+    # transcripts = [video.transcript for video in videos if video.transcript]
+    # if transcripts:
+    #     response = gemini.process_transcripts(transcripts, model="gemini-2.0-flash-lite")
+    #     print(response.text)
+    # else:
+    #     print("No transcripts available to process")
 
 if __name__ == "__main__":
     main()
