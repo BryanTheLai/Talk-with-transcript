@@ -152,6 +152,35 @@ class YoutubeClient:
                 error_code="playlist_retrieval_error"
             )
 
+    def fetch_content(self, url: str, include_transcripts: bool = True) -> ApiResponse[List[Video]]:
+        """
+        Fetch content from YouTube URL (handles both videos and playlists)
+        
+        Args:
+            url: YouTube video or playlist URL
+            include_transcripts: Whether to include transcripts in the results
+            
+        Returns:
+            ApiResponse containing a list of Video objects
+        """
+        try:
+            # Check if URL is a playlist by looking for 'list=' parameter
+            is_playlist = bool(re.search(r'list=([^&]+)', url))
+            
+            if is_playlist:
+                return self.list_playlist_videos(url, include_transcripts=include_transcripts)
+            else:
+                response = self.get_video_with_transcript(url) if include_transcripts else self.get_video(url)
+                if response.success:
+                    return ApiResponse(success=True, data=[response.data])
+                return response
+        except Exception as e:
+            return ApiResponse(
+                success=False,
+                error=f"Failed to fetch content: {str(e)}",
+                error_code="content_fetch_error"
+            )
+
     def _extract_playlist_id(self, playlist_url: str) -> str:
         """Extract playlist ID from URL using regex pattern matching"""
         # Handle case where input might already be a playlist ID
@@ -200,9 +229,9 @@ class YoutubeClient:
         
         # Try different patterns for description
         description = (
-            self._extract_regex(response, r'<meta name="description" content="([^"]*)"')
-            or self._extract_regex(response, r'"shortDescription":"(.*?)"(?=,)')
-            or self._extract_regex(response, r'"description":{"simpleText":"(.*?)"(?=})')
+            # self._extract_regex(response, r'<meta name="description" content="([^"]*)"')
+            self._extract_regex(response, r'"description":{"simpleText":"(.*?)"(?=})')
+            # or self._extract_regex(response, r'"shortDescription":"(.*?)"(?=,)')
             or ""
         )
         
