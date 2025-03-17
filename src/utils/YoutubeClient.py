@@ -2,7 +2,6 @@ from typing import Dict, Any, List, Optional, Union
 import re
 import requests
 import html
-from youtube_transcript_api import  YouTubeTranscriptApi
 from youtube_transcript_api import YouTubeTranscriptApi
 from .ApiResponse import ApiResponse
 
