@@ -1,10 +1,10 @@
-from typing import List
-from utils.YoutubeClient import YoutubeClient, Video
+from utils.YoutubeClient import YoutubeClient
 from utils.Formatter import VideoFormatter
 from llm.GeminiClient import GeminiClient
 
 def main():
-    # Initialize YouTube client
+    # Initialize client with optional proxy
+    # Example: youtube = YoutubeClient(proxy="http://user:pass@proxyhost:port")
     youtube = YoutubeClient()
     
     # Demo: Process single video with transcript
@@ -19,9 +19,18 @@ def main():
     else:
         print(f"Error: {response.error}")
     
+    # Demo with proxy for a different request
+    # Uncomment and configure with your proxy details
+    # proxy_youtube = YoutubeClient(
+    #     proxy="http://your-proxy-host:port", 
+    #     timeout=60,
+    #     headers={"User-Agent": "Custom User Agent"}
+    # )
+    # proxy_response = proxy_youtube.get_video_with_transcript(video_url)
+    
     # Demo: Process YouTube playlist (without transcripts for speed)
     playlist_url = "https://www.youtube.com/watch?v=scuPf6CMLtI&list=PLkPSXEe30ibqeQFm8dqNy0uxOL2W2wuN_"
-    playlist_response = youtube.list_playlist_videos(playlist_url)
+    playlist_response = youtube.list_playlist_videos(playlist_url, include_transcripts=True)
     
     if playlist_response.success:
         videos = playlist_response.data

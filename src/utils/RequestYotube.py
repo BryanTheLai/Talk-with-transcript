@@ -1,8 +1,7 @@
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 import re
 import requests
 import html
-from youtube_transcript_api import  YouTubeTranscriptApi
 from .ApiResponse import ApiResponse
 
 
@@ -46,12 +45,31 @@ class Video:
 
 
 class YoutubeClient:
-    """Client for fetching YouTube video metadata and transcripts"""
+    """Client for fetching YouTube video metadata and transcripts with proxy support"""
     
-    HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    DEFAULT_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
     
-    def __init__(self):
-        self.transcript_api = YouTubeTranscriptApi()
+    def __init__(
+        self, 
+        proxy: Optional[Union[str, Dict[str, str]]] = None,
+        timeout: int = 30,
+        headers: Optional[Dict[str, str]] = None
+    ):
+        """
+        Initialize YouTube client with optional proxy support.
+        
+        Args:
+            proxy: Proxy URL as string (e.g. 'http://user:pass@host:port') or dict mapping protocol to URL
+            timeout: Request timeout in seconds
+            headers: Optional custom headers to use for all requests
+        """
+        self.proxies = {"http": proxy, "https": proxy} if isinstance(proxy, str) else proxy
+        self.timeout = timeout
+        self.headers = headers or self.DEFAULT_HEADERS.copy()
+        self.session = requests.Session()
     
     def get_video(self, video_url: str) -> ApiResponse[Video]:
         """Fetch metadata for a YouTube video"""
@@ -99,12 +117,50 @@ class YoutubeClient:
             )
     
     def get_transcript(self, video_id: str) -> ApiResponse[str]:
-        """Fetch transcript for a YouTube video by ID"""
+        """Fetch transcript for a YouTube video by ID using direct HTTP requests"""
         try:
-            # Use fetch() method instead of get_transcript()
-            fetched_transcript = self.transcript_api.fetch(video_id)
-            # Extract text from each snippet in the fetched transcript
-            transcript_text = " ".join([snippet.text for snippet in fetched_transcript])
+            # Fetch the video page
+            url = f"https://www.youtube.com/watch?v={video_id}"
+            response = self._make_request(url).text
+            
+            # Look for caption tracks data in the page content
+            captions_regex = r'"captionTracks":\s*(\[.*?\])'
+            captions_match = re.search(captions_regex, response, re.DOTALL)
+            
+            if not captions_match:
+                return ApiResponse(
+                    success=False,
+                    error="No transcript data found for this video",
+                    error_code="transcript_not_found"
+                )
+            
+            captions_data = captions_match.group(1)
+            
+            # Extract the URL for the first available transcript
+            caption_url_regex = r'"baseUrl":\s*"([^"]*)"'
+            caption_url_match = re.search(caption_url_regex, captions_data)
+            
+            if not caption_url_match:
+                return ApiResponse(
+                    success=False,
+                    error="Could not find transcript URL",
+                    error_code="transcript_url_not_found"
+                )
+            
+            # Get the transcript URL and unescape it
+            transcript_url = html.unescape(caption_url_match.group(1))
+            
+            # Fetch the transcript XML
+            transcript_response = self._make_request(transcript_url)
+            transcript_xml = transcript_response.text
+            
+            # Extract text segments from XML
+            text_regex = r'<text[^>]*>(.*?)</text>'
+            text_matches = re.findall(text_regex, transcript_xml)
+            
+            # Combine all segments and unescape HTML entities
+            transcript_text = " ".join([html.unescape(text) for text in text_matches])
+            
             return ApiResponse(success=True, data=transcript_text)
         except Exception as e:
             return ApiResponse(
@@ -121,7 +177,7 @@ class YoutubeClient:
             
             # Fetch playlist page
             url = f"https://www.youtube.com/playlist?list={playlist_id}"
-            response = requests.get(url, headers=self.HEADERS).text
+            response = self._make_request(url).text
             
             # Extract video IDs from playlist page using regex
             # Look for patterns in both standard format and in embedded JSON data
@@ -152,6 +208,17 @@ class YoutubeClient:
                 error_code="playlist_retrieval_error"
             )
 
+    def _make_request(self, url: str) -> requests.Response:
+        """Make HTTP request with configured proxies and headers"""
+        response = self.session.get(
+            url, 
+            headers=self.headers, 
+            proxies=self.proxies, 
+            timeout=self.timeout
+        )
+        response.raise_for_status()
+        return response
+
     def _extract_playlist_id(self, playlist_url: str) -> str:
         """Extract playlist ID from URL using regex pattern matching"""
         # Handle case where input might already be a playlist ID
@@ -167,7 +234,7 @@ class YoutubeClient:
                 
         # If no match was found, raise error
         raise ValueError(f"Could not extract playlist ID from URL: {playlist_url}")
-    
+
     def _extract_video_id(self, video_url: str) -> str:
         """Extract video ID from URL using regex pattern matching"""
         # Handle case where input might already be an ID (11 characters with specific allowed chars)
@@ -190,7 +257,7 @@ class YoutubeClient:
     def _fetch_metadata(self, video_id: str) -> Dict[str, Any]:
         """Scrape metadata for a video from YouTube page HTML"""
         url = f"https://www.youtube.com/watch?v={video_id}"
-        response = requests.get(url, headers=self.HEADERS).text
+        response = self._make_request(url).text
         
         # Extract metadata and decode HTML entities
         title = self._extract_regex(response, r'<meta name="title" content="([^"]*)"') or "Unknown"
