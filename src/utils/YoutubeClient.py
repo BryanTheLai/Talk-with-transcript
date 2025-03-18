@@ -3,8 +3,8 @@ import re
 import requests
 import html
 from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.proxies import GenericProxyConfig
 from .ApiResponse import ApiResponse
-
 
 class Video:
     """Structured representation of YouTube video data with optional transcript"""
@@ -44,7 +44,6 @@ class Video:
             result["transcript"] = self.transcript
         return result
 
-
 class YoutubeClient:
     """Client for fetching YouTube video metadata and transcripts with proxy support"""
     
@@ -71,8 +70,22 @@ class YoutubeClient:
         self.timeout = timeout
         self.headers = headers or self.DEFAULT_HEADERS.copy()
         self.session = requests.Session()
-        self.transcript_api = YouTubeTranscriptApi
-    
+        if self.proxies:
+            http_proxy = self.proxies.get("http")
+            https_proxy = self.proxies.get("https")
+            
+            if http_proxy or https_proxy:
+                self.transcript_api = YouTubeTranscriptApi(
+                    proxy_config=GenericProxyConfig(
+                        http_url=http_proxy,
+                        https_url=https_proxy,
+                    )
+                )
+            else:
+                self.transcript_api = YouTubeTranscriptApi
+        else:
+            self.transcript_api = YouTubeTranscriptApi
+
     def get_video(self, video_url: str) -> ApiResponse[Video]:
         """Fetch metadata for a YouTube video"""
         try:
