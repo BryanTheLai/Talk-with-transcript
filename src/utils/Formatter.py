@@ -1,5 +1,5 @@
 from typing import Dict, List
-from .YoutubeClient import Video
+from .models import Video 
 
 class VideoFormatter:
     """Formats Video objects for different output formats (console, XML)"""
