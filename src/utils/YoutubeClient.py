@@ -14,6 +14,12 @@ from .DatabaseClient import DatabaseClient
 class YoutubeClient:
     """Client for fetching YouTube video metadata and transcripts with proxy support"""
     
+    # Constants for patterns and URLs
+    VIDEO_URL_PATTERN = r'(?:v=|\/embed\/|\/shorts\/|youtu\.be\/)([0-9A-Za-z_-]{11})'
+    PLAYLIST_URL_PATTERN = r'(?:list=)([0-9A-Za-z_-]+)'
+    DEFAULT_LANGUAGES = ['en', 'en-US', 'en-GB']
+    YOUTUBE_BASE_URL = "https://www.youtube.com"
+    
     DEFAULT_HEADERS = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
@@ -50,33 +56,24 @@ class YoutubeClient:
 
     def _configure_transcript_api(self):
         """Configure transcript API with proxy if provided"""
-        if self.proxies:
-            http_proxy = self.proxies.get("http")
-            https_proxy = self.proxies.get("https")
+        if not self.proxies:
+            return YouTubeTranscriptApi()
             
-            if http_proxy or https_proxy:
-                from youtube_transcript_api.proxies import GenericProxyConfig
-                return YouTubeTranscriptApi(
-                    proxy_config=GenericProxyConfig(
-                        http_url=http_proxy,
-                        https_url=https_proxy,
-                    )
+        http_proxy = self.proxies.get("http")
+        https_proxy = self.proxies.get("https")
+        
+        if http_proxy or https_proxy:
+            return YouTubeTranscriptApi(
+                proxy_config=GenericProxyConfig(
+                    http_url=http_proxy,
+                    https_url=https_proxy,
                 )
-        return YouTubeTranscriptApi()  # Return instance, not class
+            )
+        return YouTubeTranscriptApi()
 
     def fetch_content(self, url: str) -> ApiResponse[List[Video]]:
         """
         Main entry point: Fetch YouTube content (metadata and transcript) from URL
-        
-        This method handles both single videos and playlists, automatically
-        detecting the type of content and retrieving full metadata and transcripts.
-        All successful fetches are cached in the database when enabled.
-        
-        Args:
-            url: YouTube video or playlist URL
-            
-        Returns:
-            ApiResponse containing a list of Video objects with transcripts
         """
         try:
             # Check if URL is a playlist
@@ -105,7 +102,9 @@ class YoutubeClient:
             if self.use_database and self.db_client:
                 db_response = self.db_client.get_video_by_id(video_id)
                 if db_response.success and db_response.data:
+                    logging.info(f"Video {video_id} found in database cache")
                     return ApiResponse(success=True, data=db_response.data)
+                logging.info(f"Video {video_id} not found in cache, fetching from YouTube")
             
             # Fetch fresh data
             metadata = self._fetch_metadata(video_id)
@@ -115,7 +114,7 @@ class YoutubeClient:
                 channel=metadata.get("channel", "Unknown"),
                 published_date=metadata.get("published_date", "Unknown"),
                 view_count=metadata.get("view_count", "0"),
-                url=f"https://www.youtube.com/watch?v={video_id}",
+                url=f"{self.YOUTUBE_BASE_URL}/watch?v={video_id}",
                 description=metadata.get("description", "")
             )
             
@@ -125,8 +124,7 @@ class YoutubeClient:
                 video.transcript = transcript_response.data
             
             # Save to database if transcript is not empty
-            if self.use_database and self.db_client and video.transcript:
-                self.db_client.save_video(video)
+            self._save_to_db(video)
             
             return ApiResponse(success=True, data=video)
         except Exception as e:
@@ -139,13 +137,12 @@ class YoutubeClient:
     def _get_transcript(self, video_id: str) -> ApiResponse[str]:
         """Fetch transcript for a YouTube video by ID"""
         try:
-            # Try API first
-            fetched_transcript  = self.transcript_api.fetch(
-                video_id,                
-                languages=['en', 'en-US', 'en-GB'],
+            transcript = " ".join(
+                snippet.text for snippet in self.transcript_api.fetch(
+                    video_id, languages=self.DEFAULT_LANGUAGES
                 )
-            transcript_text = " ".join([snippet.text for snippet  in fetched_transcript ])
-            return ApiResponse(success=True, data=transcript_text)
+            )
+            return ApiResponse(success=True, data=transcript)
         except Exception as e:
             return ApiResponse(
                 success=False,
@@ -168,7 +165,7 @@ class YoutubeClient:
             
             videos = []
             for i, video_id in enumerate(video_ids):
-                video_url = f"https://www.youtube.com/watch?v={video_id}"
+                video_url = f"{self.YOUTUBE_BASE_URL}/watch?v={video_id}"
                 logging.info(f"Processing video {i+1}/{len(video_ids)}: {video_url}")
                 
                 video_response = self._get_video(video_url)
@@ -189,7 +186,7 @@ class YoutubeClient:
     
     def _extract_playlist_video_ids(self, playlist_id: str) -> List[str]:
         """Extract all video IDs from a playlist"""
-        url = f"https://www.youtube.com/playlist?list={playlist_id}"
+        url = f"{self.YOUTUBE_BASE_URL}/playlist?list={playlist_id}"
         response = self._make_request(url).text
         
         # Extract video IDs using regex
@@ -198,77 +195,85 @@ class YoutubeClient:
         
         # Process matches and remove duplicates
         video_ids = []
+        seen = set()
         for match in matches:
-            video_id = match[0] if match[0] else match[1]
-            if video_id and video_id not in video_ids:
+            video_id = match[0] or match[1]
+            if video_id and video_id not in seen:
                 video_ids.append(video_id)
+                seen.add(video_id)
         
         return video_ids
 
     # Helper methods below
     def _make_request(self, url: str) -> requests.Response:
         """Make HTTP request with configured proxies and headers"""
+        session = requests.Session() if self.proxies else self.session
         if self.proxies:
-            # Create a new session for this specific request
-            request_session = requests.Session()
-            request_session.headers.update(self.headers)
-            response = request_session.get(url, proxies=self.proxies, timeout=self.timeout)
-        else:
-            # Use the persistent session for better performance
-            response = self.session.get(url, headers=self.headers, timeout=self.timeout)
-        
-        response.raise_for_status()
-        return response
+            session.headers.update(self.headers)
+            
+        with session as s:
+            response = s.get(url, 
+                          proxies=self.proxies, 
+                          timeout=self.timeout,
+                          headers=self.headers if not self.proxies else None)
+            response.raise_for_status()
+            return response
 
+    def _extract_id(self, url: str, pattern: str, direct_match_length: int = None) -> str:
+        """Extract ID from URL using pattern"""
+        # Handle direct ID input
+        if direct_match_length and re.match(f'^[0-9A-Za-z_-]{{{direct_match_length}}}$', url):
+            return url
+            
+        # Regular URL format
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+                
+        raise ValueError(f"Could not extract ID from URL: {url}")
+        
     def _extract_playlist_id(self, playlist_url: str) -> str:
         """Extract playlist ID from URL"""
-        # Handle direct ID input
+        # Handle direct ID input for backward compatibility
         if re.match(r'^[0-9A-Za-z_-]+$', playlist_url) and not '/' in playlist_url and not '.' in playlist_url:
             return playlist_url
             
-        # Regular URL format
-        match = re.search(r'(?:list=)([0-9A-Za-z_-]+)', playlist_url)
-        if match:
-            return match.group(1)
-                
-        raise ValueError(f"Could not extract playlist ID from URL: {playlist_url}")
+        return self._extract_id(playlist_url, self.PLAYLIST_URL_PATTERN)
     
     def _extract_video_id(self, video_url: str) -> str:
         """Extract video ID from URL"""
-        # Handle direct ID input
-        if re.match(r'^[0-9A-Za-z_-]{11}$', video_url):
-            return video_url
-            
-        # Regular URL formats
-        pattern = r'(?:v=|\/embed\/|\/shorts\/|youtu\.be\/)([0-9A-Za-z_-]{11})'
-        match = re.search(pattern, video_url)
-        if match:
-            return match.group(1)
-                
-        raise ValueError(f"Could not extract video ID from URL: {video_url}")
+        return self._extract_id(video_url, self.VIDEO_URL_PATTERN, 11)
     
     def _fetch_metadata(self, video_id: str) -> Dict[str, Any]:
         """Fetch video metadata from YouTube page"""
-        url = f"https://www.youtube.com/watch?v={video_id}"
+        url = f"{self.YOUTUBE_BASE_URL}/watch?v={video_id}"
         response = self._make_request(url).text
         
-        # Extract and decode metadata
-        title = self._extract_regex(response, r'<meta name="title" content="([^"]*)"') or "Unknown"
-        channel = self._extract_regex(response, r'"ownerChannelName":"([^"]*)"') or "Unknown"
-        published_date = self._extract_regex(response, r'"publishDate":"([^"]*)"') or "Unknown"
-        view_count = self._extract_regex(response, r'"viewCount":"([^"]*)"') or "0"
-        description = self._extract_regex(response, r'"description":{"simpleText":"(.*?)"(?=})') or ""
-        
-        return {
-            "title": html.unescape(title),
-            "channel": html.unescape(channel),
-            "published_date": published_date,
-            "view_count": view_count,
-            "description": html.unescape(description)
+        # Define extraction patterns with default values
+        patterns = {
+            "title": (r'<meta name="title" content="([^"]*)"', "Unknown"),
+            "channel": (r'"ownerChannelName":"([^"]*)"', "Unknown"),
+            "published_date": (r'"publishDate":"([^"]*)"', "Unknown"),
+            "view_count": (r'"viewCount":"([^"]*)"', "0"),
+            "description": (r'"description":{"simpleText":"(.*?)"(?=})', "")
         }
+        
+        # Extract and decode metadata
+        metadata = {
+            key: html.unescape(self._extract_regex(response, pattern) or default)
+            for key, (pattern, default) in patterns.items()
+        }
+        
+        return metadata
     
     def _extract_regex(self, text: str, pattern: str) -> Optional[str]:
         """Extract first match from text using regex pattern"""
         match = re.search(pattern, text)
         return match.group(1) if match else None
-    
+        
+    def _save_to_db(self, video: Video) -> bool:
+        """Save video to database if enabled"""
+        if not (self.use_database and self.db_client and video.transcript):
+            return False
+        
+        return self.db_client.save_video(video).success
