@@ -282,7 +282,14 @@ class YoutubeClient:
     
     def _save_to_db(self, video: Video) -> bool:
         """Save video to database if enabled and transcript exists"""
+        # Skip saving if database not enabled, client missing, transcript missing,
+        # or if critical metadata is missing/default
         if not (self.use_database and self.db_client and video.transcript):
+            return False
+            
+        # Don't save videos with empty titles or empty/unknown channels
+        if not video.title or not video.channel or video.channel == "Unknown":
+            logging.info(f"Skipping database save for video {video.id}: Invalid metadata (title: '{video.title}', channel: '{video.channel}')")
             return False
         
         return self.db_client.save_video(video).success
