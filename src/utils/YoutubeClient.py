@@ -164,17 +164,33 @@ class YoutubeClient:
             logging.info(f"Found {len(video_ids)} videos in playlist {playlist_id}")
             
             videos = []
+            need_youtube_request = False  # Track if we need to make YouTube requests
+            
             for i, video_id in enumerate(video_ids):
                 video_url = f"{self.YOUTUBE_BASE_URL}/watch?v={video_id}"
                 logging.info(f"Processing video {i+1}/{len(video_ids)}: {video_url}")
                 
+                # Check if we need to add a delay from previous iteration
+                if need_youtube_request and i > 0:
+                    time.sleep(random.uniform(min_delay, max_delay) / 100)  # If values were in milliseconds
+                
+                # Reset the flag for this iteration
+                need_youtube_request = False
+                
+                # Check database cache first if enabled
+                video_from_cache = None
+                if self.use_database and self.db_client:
+                    db_response = self.db_client.get_video_by_id(video_id)
+                    if db_response.success and db_response.data:
+                        logging.info(f"Video {video_id} found in database cache")
+                        videos.append(db_response.data)
+                        continue  # Skip YouTube request entirely
+                
+                # If we reach here, we need to make a YouTube request
+                need_youtube_request = True
                 video_response = self._get_video(video_url)
                 if video_response.success:
                     videos.append(video_response.data)
-                
-                # Add delay between requests except after the last one
-                if i < len(video_ids) - 1:
-                    time.sleep(random.uniform(min_delay, max_delay))
             
             return ApiResponse(success=True, data=videos)
         except Exception as e:
