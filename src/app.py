@@ -4,48 +4,64 @@ import streamlit as st
 from utils.YoutubeClient import YoutubeClient
 from utils.Formatter import VideoFormatter
 
-def fetch_youtube_content(url: str) -> tuple[list[str], dict]:
-    """Fetch YouTube content and return formatted XML with timing metrics"""
-    start = time.time()
-    metrics = {'start': start}
+def fetch_youtube_content(url: str) -> list[str]:
+    """Fetch YouTube content and return formatted XML"""
+    # Setup client with database if available
+    db_url = os.environ.get("NEON_YOUTUBE_DATABASE_URL")
     
-    # Setup client
-    db_connection_string = os.environ.get("NEON_YOUTUBE_DATABASE_URL")
-    client = YoutubeClient(use_database=bool(db_connection_string), 
-                          db_connection_string=db_connection_string)
+    # # Configure proxy from environment variables
+    # proxy_domain = os.environ.get('BRIGHTDATA_DOMAIN_NAME')
+    # proxy_port = os.environ.get('BRIGHTDATA_PROXY_PORT')
+    # proxy_username = os.environ.get('BRIGHTDATA_PROXY_USERNAME')
+    # proxy_password = os.environ.get('BRIGHTDATA_PROXY_PASSWORD')
+
+    # proxy_url = None
+    # if all([proxy_domain, proxy_port, proxy_username, proxy_password]):
+    #     # Create a proxy string in the format expected by YoutubeClient
+    #     proxy_url = f"{proxy_username}:{proxy_password}@{proxy_domain}:{proxy_port}"
+    #     print(f"Using proxy: {proxy_domain}:{proxy_port}")
+    # else:
+    #     print("Proxy configuration incomplete - using direct connection")
     
-    # Fetch content
-    metrics['fetch_start'] = time.time()
+    # Initialize YouTube client with database and proxy
+    client = YoutubeClient(
+        use_database=bool(db_url), 
+        db_connection_string=db_url,
+        #proxy_url=proxy_url
+    )
+    
+    # Fetch and format content
+    start_time = time.time()
     response = client.fetch_content(url)
-    metrics['fetch_end'] = time.time()
+    if response.error:
+        print(f"Error: {response.error}")
+    fetch_time = round(time.time() - start_time, 2)
     
-    # Format to XML
+    # Return results and timing
     xml_results = [VideoFormatter.to_xml(video) for video in response.data] if response.success else []
-    metrics['fetch_seconds'] = round(metrics['fetch_end'] - metrics['fetch_start'], 2)
-    
-    return xml_results, metrics
+    return xml_results, fetch_time
 
 def main():
     st.title("YouTube to XML Converter")
     
     url = st.text_input("Enter YouTube URL (video or playlist)")
-    submit_button = st.button("Get XML")
     
-    if submit_button:
-        if url:
-            with st.spinner("Fetching content..."):
-                xml_results, metrics = fetch_youtube_content(url)
-            
-            if xml_results:
-                st.info(f"⏱️ Fetch: {metrics['fetch_seconds']}s")
-                
-                for i, xml in enumerate(xml_results):
-                    st.subheader(f"Video {i+1}")
-                    st.code(xml, language="xml")
-            else:
-                st.error("No content found or error occurred")
-        else:
+    if st.button("Get XML"):
+        if not url:
             st.warning("Please enter a YouTube URL")
+            return
+            
+        with st.spinner("Fetching content..."):
+            xml_results, fetch_time = fetch_youtube_content(url)
+        
+        if xml_results:
+            st.info(f"⏱️ Fetch time: {fetch_time}s")
+            
+            for i, xml in enumerate(xml_results):
+                st.subheader(f"Video {i+1}")
+                st.code(xml, language="xml")
+        else:
+            st.error("No content found or error occurred")
 
 if __name__ == "__main__":
     main()
