@@ -3,6 +3,10 @@ import time
 import streamlit as st
 from utils.YoutubeClient import YoutubeClient
 from utils.Formatter import VideoFormatter
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 def fetch_youtube_content(url: str) -> list[str]:
     """Fetch YouTube content and return formatted XML"""
@@ -41,6 +45,7 @@ def fetch_youtube_content(url: str) -> list[str]:
     xml_results = [VideoFormatter.to_xml(video) for video in response.data] if response.success else []
     return xml_results, fetch_time
 
+
 def main():
     st.title("YouTube to XML Converter")
     
@@ -60,6 +65,7 @@ def main():
             for i, xml in enumerate(xml_results):
                 st.subheader(f"Video {i+1}")
                 st.code(xml, language="xml")
+
         else:
             st.error("No content found or error occurred")
 
