@@ -13,7 +13,7 @@ from .DatabaseClient import DatabaseClient
 class YoutubeClient:
     """Client for fetching YouTube video metadata and transcripts"""
     
-    # URL parsing patterns
+    # URL parsing patterns - combined for efficiency
     VIDEO_ID_RE = re.compile(r'(?:v=|\/embed\/|\/shorts\/|youtu\.be\/)([0-9A-Za-z_-]{11})')
     PLAYLIST_ID_RE = re.compile(r'(?:list=)([0-9A-Za-z_-]+)')
     PLAYLIST_VIDEO_PATTERN = re.compile(r'(?:"videoId":"([^"]+)"|"videoRenderer":{"videoId":"([^"]+)")')
@@ -42,33 +42,48 @@ class YoutubeClient:
         headers: Optional[Dict[str, str]] = None,
         db_connection_string: Optional[str] = None,
         use_database: bool = True,
-        proxy_url: str = None,
+        proxy_url: Optional[str] = None,
     ):
-        """Initialize YouTube client with optional proxy and database support"""
+        """Initialize YouTube client with optional proxy and database support
         
+        Args:
+            timeout: HTTP request timeout in seconds
+            headers: Custom HTTP headers
+            db_connection_string: Database connection string
+            use_database: Whether to use database caching
+            proxy_url: Optional HTTP proxy URL
+        """
         # Configure HTTP session
         self.session = requests.Session()
         self.timeout = timeout
         self.session.headers.update(headers or self.DEFAULT_HEADERS)
         
         # Configure database
-        self.use_database = use_database and db_connection_string
+        self._setup_database(db_connection_string, use_database)
+        
+        # Configure proxy
+        self._setup_proxy(proxy_url)
+    
+    def _setup_database(self, connection_string: Optional[str], use_database: bool) -> None:
+        """Set up database connection if enabled"""
+        self.use_database = use_database and connection_string
         self.db_client = None
+        
         if self.use_database:
             try:
-                self.db_client = DatabaseClient(db_connection_string)
+                self.db_client = DatabaseClient(connection_string)
                 self.db_client.connect()
                 self.db_client.initialize_schema()
             except Exception as e:
                 logging.error(f"Database initialization failed: {e}")
                 self.use_database = False
-        
-        # Default to no proxy
+    
+    def _setup_proxy(self, proxy_url: Optional[str]) -> None:
+        """Configure proxy for requests and transcript API if provided"""
         self.session.proxies = None
         self.transcript_api = YouTubeTranscriptApi()
         
-        # Set up proxy if provided
-        if proxy_url is not None:
+        if proxy_url:
             logging.info(f"Using proxy: {proxy_url}")
             http_proxy = f"http://{proxy_url}"
             https_proxy = f"https://{proxy_url}"
@@ -87,19 +102,64 @@ class YoutubeClient:
             self.transcript_api = YouTubeTranscriptApi(proxy_config=proxy_config)
     
     def fetch_content(self, url: str) -> ApiResponse[List[Video]]:
-        """Main entry point: Fetch YouTube content (metadata and transcript) from URL"""
+        """Main entry point: Fetch YouTube content (metadata and transcript) from URL
+        
+        Args:
+            url: YouTube URL for a video or playlist
+            
+        Returns:
+            ApiResponse containing a list of Video objects or error details
+        """
         try:
-            # Determine if URL is for a playlist or single video
-            if self.PLAYLIST_ID_RE.search(url):
+            # Parse URL to extract video and playlist IDs
+            video_id, playlist_id = self._parse_url(url)
+            
+            # Special case for Mix playlists (starting with RD)
+            if playlist_id and playlist_id.startswith("RD"):
+                return self._handle_mix_playlist(video_id, playlist_id)
+            
+            # Normal processing path
+            if playlist_id:
                 return self._get_playlist_videos(url)
-            else:
+            elif video_id:
                 video_response = self._get_video(url)
                 return ApiResponse(success=True, data=[video_response.data]) if video_response.success else video_response
+            else:
+                return ApiResponse(success=False, error="No valid YouTube video or playlist ID found in URL")
         except Exception as e:
             return ApiResponse(success=False, error=f"Content fetch error: {str(e)}")
+    
+    def _parse_url(self, url: str) -> Tuple[Optional[str], Optional[str]]:
+        """Parse YouTube URL to extract video and playlist IDs
+        
+        Returns:
+            Tuple of (video_id, playlist_id), either may be None
+        """
+        video_id_match = self.VIDEO_ID_RE.search(url)
+        video_id = video_id_match.group(1) if video_id_match else None
+        
+        playlist_match = self.PLAYLIST_ID_RE.search(url)
+        playlist_id = playlist_match.group(1) if playlist_match else None
+        
+        return video_id, playlist_id
+    
+    def _handle_mix_playlist(self, video_id: Optional[str], playlist_id: str) -> ApiResponse[List[Video]]:
+        """Handle special case for Mix playlists"""
+        if video_id:
+            video_response = self._get_video(f"{self.YOUTUBE_BASE_URL}/watch?v={video_id}")
+            return ApiResponse(success=True, data=[video_response.data]) if video_response.success else video_response
+        else:
+            return ApiResponse(success=False, error="Cannot process Mix playlists without a video ID")
 
     def _get_video(self, video_url: str) -> ApiResponse[Video]:
-        """Fetch complete video data with metadata and transcript"""
+        """Fetch complete video data with metadata and transcript
+        
+        Args:
+            video_url: YouTube video URL or ID
+            
+        Returns:
+            ApiResponse containing a Video object or error details
+        """
         try:
             video_id = self._extract_video_id(video_url)
             
@@ -137,7 +197,15 @@ class YoutubeClient:
         playlist_url: str, 
         delay_range: Tuple[float, float] = (0.01, 0.03)
     ) -> ApiResponse[List[Video]]:
-        """Fetch all videos with metadata and transcripts from a playlist"""
+        """Fetch all videos with metadata and transcripts from a playlist
+        
+        Args:
+            playlist_url: YouTube playlist URL or ID
+            delay_range: Range of seconds to wait between requests
+            
+        Returns:
+            ApiResponse containing a list of Video objects or error details
+        """
         try:
             playlist_id = self._extract_playlist_id(playlist_url)
             video_ids = self._extract_playlist_video_ids(playlist_id)
