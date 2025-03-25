@@ -5,11 +5,9 @@ import html
 import logging
 import time
 import random
-import os
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.proxies import GenericProxyConfig
-from .ApiResponse import ApiResponse
-from .models import Video
+from .models import ApiResponse, Video
 from .DatabaseClient import DatabaseClient
 
 class YoutubeClient:

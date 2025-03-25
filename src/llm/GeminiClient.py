@@ -57,31 +57,3 @@ class GeminiClient:
             def error_generator():
                 yield types.GenerateContentResponse(text=f"Error: {str(e)}")
             return error_generator()
-        
-    def process_pdf(self, pdf_path: str, prompt: str = "Convert this document to well-formatted Markdown") -> str:
-        """
-        Process a PDF file directly using Gemini's document processing capabilities.
-        """
-        if not self.api_key:
-            return "Error: API key not configured"
-            
-        try:
-            # Read the PDF file as binary data
-            with open(pdf_path, "rb") as pdf_file:
-                pdf_data = pdf_file.read()
-            
-            # Send the PDF directly to Gemini
-            response = self.client.models.generate_content(
-                model="gemini-2.0-flash",  # Using 1.5-flash for better document handling
-                contents=[
-                    types.Part.from_bytes(
-                        data=pdf_data,
-                        mime_type='application/pdf',
-                    ),
-                    prompt
-                ]
-            )
-            
-            return response.text
-        except Exception as e:
-            return f"Error processing PDF: {str(e)}"
