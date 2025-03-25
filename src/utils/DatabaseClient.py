@@ -4,8 +4,7 @@ import psycopg
 from typing import Optional, Dict, List, Any, Union
 from datetime import datetime
 import logging
-from .ApiResponse import ApiResponse
-from .models import Video
+from .models import ApiResponse, Video
 
 class DatabaseClient:
     """Client for interacting with PostgreSQL database to store YouTube video data"""
