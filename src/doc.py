@@ -4,7 +4,7 @@ from utils.DocumentProcessor import DocumentProcessor
 import time
 
 if __name__ == "__main__":
-    pdf_file = "src/vit.pdf"
+    pdf_file = "src/invoice.pdf"
     output_folder = "output_folder"
     
     start = time.time()

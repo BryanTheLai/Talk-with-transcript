@@ -6,3 +6,7 @@ streamlit==1.43.2
 psycopg==3.2.6
 psycopg[binary]==3.2.6
 PyMuPDF==1.25.4
+beautifulsoup4==4.13.3
+lxml==5.3.1
+
+

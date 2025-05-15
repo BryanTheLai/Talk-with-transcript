@@ -1,73 +1,7 @@
-# Talk with transcript
- No more copying youtube transcripts 1 by 1 into prompt
-```GeminiClient.py
-from google import genai
-from google.genai import types
 import os
-from typing import List, Optional, Generator
-from dotenv import load_dotenv
-
-class GeminiClient:
-    """Client for processing transcripts with Google Gemini AI"""
-    
-    # System instruction for transcript processing
-    SYSTEM_INSTRUCTION = """
-    You are an expert in the field discussed in the transcript. 
-    Explain concepts clearly and directly, avoiding jargon and minimalistic with classy taste.
-    Use first principles thinking and analogies.
-    Keep the structure logical and sequential.
-
-    Your response should follow this structure:
-    1. Key Concepts - Brief overview of main ideas and their practical applications
-    2. Detailed Explanation - Clear breakdown of the content
-    3. Summary - Concise, inspiring conclusion to reinforce learning
-    4. Encouragement - Brief positive reinforcement for the learner
-
-    Always include the videos titles and links when talking about them in responses.
-
-    {Main Content}
-
-    Use vocabulary and style matching the provided transcript.
-    Use emojis and icons to make it easier to understand and interperate.
-    """
-    
-    def __init__(self, api_key: str = None):
-        """Initialize client with API key from parameter or environment"""
-        load_dotenv()
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
-        self.client = genai.Client(api_key=self.api_key)
-        self.chat = None
-    
-    def create_chat(self, model: str = "gemini-2.0-flash"):
-        """Create a new chat session"""
-        self.chat = self.client.chats.create(
-            model=model,
-            config=types.GenerateContentConfig(
-                system_instruction=self.SYSTEM_INSTRUCTION,
-                temperature=0.7
-            )
-        )
-        return self.chat
-    
-    def send_message_stream(self, content: str) -> Generator:
-        """Send a message to the chat and stream the response"""
-        if not self.chat:
-            self.create_chat()
-        
-        try:
-            return self.chat.send_message_stream(content)
-        except Exception as e:
-            def error_generator():
-                yield types.GenerateContentResponse(text=f"Error: {str(e)}")
-            return error_generator()
-
-```
-
-```DocumentProcessor.py
-import os
-import pymupdf as fitz  # PyMuPDF
+import fitz  # PyMuPDF
 from google.genai import types
-from typing import Optional, List, Tuple, Union, Set
+from typing import Optional, List, Tuple, Union
 from llm.GeminiClient import GeminiClient
 import concurrent.futures
 import threading
@@ -76,52 +10,32 @@ from collections import deque
 from datetime import datetime, timedelta
 import logging
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("DocumentProcessor")
 
 class RateLimiter:
     """Simple rate limiter to prevent exceeding API rate limits"""
     
     def __init__(self, max_requests: int, time_window: int = 60):
-        """
-        Initialize rate limiter
-        
-        Args:
-            max_requests: Maximum requests allowed in the time window
-            time_window: Time window in seconds (default: 60 seconds)
-        """
         self.max_requests = max_requests
         self.time_window = time_window
         self.request_timestamps = deque()
         self.lock = threading.Lock()
     
     def wait_if_needed(self):
-        """Wait if adding a request would exceed the rate limit"""
         with self.lock:
             now = datetime.now()
-            
-            # Remove timestamps older than the time window
+            # Remove timestamps outside time window
             while self.request_timestamps and self.request_timestamps[0] < now - timedelta(seconds=self.time_window):
                 self.request_timestamps.popleft()
             
-            # If we're at the limit, wait until we can make another request
             if len(self.request_timestamps) >= self.max_requests:
                 oldest = self.request_timestamps[0]
                 wait_time = (oldest + timedelta(seconds=self.time_window) - now).total_seconds()
                 if wait_time > 0:
-                    time.sleep(wait_time + 0.1)  # Add small buffer
-                    # Clear old timestamps before checking again
-                    while self.request_timestamps and self.request_timestamps[0] < datetime.now() - timedelta(seconds=self.time_window):
-                        self.request_timestamps.popleft()
-                    # If still at limit, wait more instead of recursion
-                    if len(self.request_timestamps) >= self.max_requests:
-                        return self.wait_if_needed()
+                    time.sleep(wait_time + 0.1)  # Small buffer
+                    return self.wait_if_needed()
             
-            # Add current timestamp and proceed
             self.request_timestamps.append(now)
 
 class DocumentProcessor:
@@ -157,14 +71,11 @@ class DocumentProcessor:
     """
     
     def __init__(self, gemini_client: Optional[GeminiClient] = None):
-        """Initialize document processor with optional Gemini client"""
         self.gemini_client = gemini_client or GeminiClient()
-        # Initialize rate limiter for Gemini 2.0 Flash (15 RPM)
-        self.rate_limiter = RateLimiter(max_requests=15)  # Corrected to 15 RPM
+        self.rate_limiter = RateLimiter(max_requests=10)  # Gemini 2.0 Flash: 15 RPM
     
     def clean_markdown_delimiters(self, text):
-        """Remove markdown code block delimiters from text."""
-        if text is None:
+        if not text:
             return None
             
         if text.startswith("```markdown"):
@@ -178,28 +89,17 @@ class DocumentProcessor:
         return text
     
     def process_single_page(self, page_num: int, page: fitz.Page, total_pages: int) -> Tuple[int, str]:
-        """Process a single PDF page and return its markdown content.
-        
-        Args:
-            page_num: Page number (0-based)
-            page: PyMuPDF page object
-            total_pages: Total pages in document
-            
-        Returns:
-            Tuple of (page_num, markdown_text)
-        """
+        """Process a single PDF page and return its markdown content"""
         try:
             logger.info(f"Processing page {page_num+1}/{total_pages}")
             
-            # Render page as image with higher resolution for better OCR
+            # Render page as image
             pix = page.get_pixmap(matrix=fitz.Matrix(3, 3))
             img_bytes = pix.tobytes("png")
             
-            # Wait if needed to respect rate limits
+            # Respect rate limits and get annotation
             self.rate_limiter.wait_if_needed()
-            
-            # Get Gemini annotation
-            response = self.gemini_client.client.models.generate_content(
+            response = self.gemini_client.generate_content(
                 model="gemini-2.0-flash",
                 contents=[
                     types.Part.from_bytes(data=img_bytes, mime_type="image/png"),
@@ -222,52 +122,35 @@ class DocumentProcessor:
         max_workers: int = 4,
         page_range: Optional[Union[List[int], Tuple[int, int]]] = None
     ) -> str:
-        """Process a PDF by converting each page to an image and having Gemini annotate it in parallel.
-        
-        Args:
-            pdf_path: Path to the PDF file
-            output_folder: Optional folder to save output (and debug images)
-            max_workers: Maximum number of concurrent workers (default: 4)
-            page_range: Optional range of pages to process (start, end) or list of page numbers
-            
-        Returns:
-            Markdown string of the combined PDF content
-        """
-        # Validate inputs
+        """Process a PDF by converting each page to markdown in parallel"""
         if not os.path.exists(pdf_path):
-            error_msg = f"PDF file not found: {pdf_path}"
-            logger.error(error_msg)
-            return error_msg
+            return f"PDF file not found: {pdf_path}"
             
-        if max_workers < 1:
-            logger.warning(f"Invalid max_workers value ({max_workers}), using default of 4")
-            max_workers = 4
-            
+        max_workers = max(1, max_workers)
         pdf_document = None
+        
         try:
-            # Create output folder if needed
+            # Setup environment
             if output_folder:
                 os.makedirs(output_folder, exist_ok=True)
                 
-            # Open the PDF
             pdf_document = fitz.open(pdf_path)
             total_pages = len(pdf_document)
             
             if total_pages == 0:
                 return "PDF contains no pages"
                 
-            # Determine which pages to process
-            pages_to_process = []
+            # Determine pages to process
             if page_range:
                 if isinstance(page_range, (list, set)):
                     pages_to_process = [p for p in page_range if 0 <= p < total_pages]
                 elif isinstance(page_range, tuple) and len(page_range) == 2:
                     start, end = page_range
-                    start = max(0, min(start, total_pages-1))
-                    end = max(start, min(end, total_pages))
-                    pages_to_process = list(range(start, end))
+                    pages_to_process = list(range(
+                        max(0, min(start, total_pages-1)),
+                        max(start, min(end, total_pages))
+                    ))
                 else:
-                    logger.warning("Invalid page_range format, processing all pages")
                     pages_to_process = list(range(total_pages))
             else:
                 pages_to_process = list(range(total_pages))
@@ -275,19 +158,17 @@ class DocumentProcessor:
             if not pages_to_process:
                 return "No valid pages to process"
                 
-            page_results = {}  # Dictionary to store results by page number
+            # Process pages in parallel
+            page_results = {}
             pdf_filename_base = os.path.splitext(os.path.basename(pdf_path))[0]
-            logger.info(f"PDF has {total_pages} pages, processing {len(pages_to_process)} pages")
+            logger.info(f"Processing {len(pages_to_process)} of {total_pages} pages")
             
-            # Process pages in parallel with rate limiting
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Submit all page processing tasks
                 future_to_page = {
                     executor.submit(self.process_single_page, page_num, pdf_document[page_num], total_pages): page_num 
                     for page_num in pages_to_process
                 }
                 
-                # Process results as they complete
                 for future in concurrent.futures.as_completed(future_to_page):
                     try:
                         page_num, text = future.result()
@@ -298,36 +179,29 @@ class DocumentProcessor:
                         page_results[page_num] = f"[Error processing page {page_num+1}: {str(e)}]"
                         logger.error(f"Error in future for page {page_num+1}: {str(e)}")
             
-            # Combine results in correct order
+            # Combine results in order
             all_pages_text = []
             for page_num in sorted(pages_to_process):
                 all_pages_text.append(page_results.get(page_num, f"[Missing content for page {page_num+1}]"))
-                
-                # Add page separator if not the last page
                 if page_num != pages_to_process[-1]:
                     all_pages_text.append(f"\n\n{{Page {page_num+1}}}------------------------------------------------\n\n")
             
-            # Join all text and return
             markdown_output = "\n".join(all_pages_text)
             
-            # Optionally save to file
+            # Save to file if requested
             if output_folder:
                 output_filepath = os.path.join(output_folder, f"{pdf_filename_base}_gemini.md")
                 try:
                     with open(output_filepath, "w", encoding="utf-8") as md_file:
                         md_file.write(markdown_output)
-                    logger.info(f"Annotated Markdown saved to: {output_filepath}")
+                    logger.info(f"Markdown saved to: {output_filepath}")
                 except IOError as e:
                     logger.error(f"Failed to write output file: {str(e)}")
                 
             return markdown_output
             
         except Exception as e:
-            error_msg = f"Error processing PDF: {str(e)}"
-            logger.error(error_msg)
-            return error_msg
+            return f"Error processing PDF: {str(e)}"
         finally:
-            # Ensure PDF is properly closed
             if pdf_document:
                 pdf_document.close()
-```
