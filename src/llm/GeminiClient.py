@@ -35,7 +35,7 @@ class GeminiClient:
         self.client = genai.Client(api_key=self.api_key)
         self.chat = None
     
-    def create_chat(self, model: str = "gemini-2.0-flash"):
+    def create_chat(self, model: str = "gemini-2.0-flash-lite"):
         """Create a new chat session"""
         self.chat = self.client.chats.create(
             model=model,
